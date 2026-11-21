@@ -1,4 +1,4 @@
-name: RDP
+name: RDP-Max-Power
 on:
   workflow_dispatch:
 concurrency:
@@ -6,10 +6,20 @@ concurrency:
   cancel-in-progress: true
 jobs:
   secure-rdp:
-    runs-on: windows-latest
-    timeout-minutes: 240
+    runs-on: windows-2022 # Máximo padrão gratuito disponível
+    timeout-minutes: 360   # 6 HORAS EXATAS
     steps:
-      - name: Configure RDP
+      - name: Optimize System Performance
+        run: |
+          Write-Host ">>> Otimizando sistema para MÁXIMA POTÊNCIA..."
+          powercfg -h off
+          bcdedit /set current bootmenulimit 1000
+          Set-Service wuauserv -StartupType Disabled
+          net stop wuauserv
+          Get-Process | Where-Object { $_.WorkingSet -gt 100MB } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Write-Host ">>> Sistema limpo e pronto."
+
+      - name: Configure RDP High Perf
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
@@ -17,7 +27,13 @@ jobs:
           netsh advfirewall firewall delete rule name="RDP-Tailscale" 2>$null
           netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
           Restart-Service TermService -Force -ErrorAction SilentlyContinue
-      - name: Create User
+          
+          # Reporta specs reais da máquina
+          $cpu = (Get-CimInstance Win32_Processor).Name
+          $ram = [math]::Round((Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property Capacity -Sum).Sum / 1GB, 2)
+          Write-Host ">>> Hardware Detectado: CPU=$cpu | RAM=${ram}GB"
+
+      - name: Create User Skyro
         run: |
           $c=@{U=[char[]](65..90);L=[char[]](97..122);N=[char[]](48..57);S=([char[]](33..47)+[char[]](58..64)+[char[]](91..96)+[char[]](123..126))}
           $raw=@();$raw+=$c.U|Get-Random -Count 4;$raw+=$c.L|Get-Random -Count 4;$raw+=$c.N|Get-Random -Count 4;$raw+=$c.S|Get-Random -Count 4
@@ -25,11 +41,14 @@ jobs:
           New-LocalUser -Name "Skyro" -Password $sp -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "Skyro"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "Skyro"
+          echo "::add-mask::$pw"
           echo "RDP_PASSWORD=$pw" >> $env:GITHUB_ENV
+
       - name: Install Tailscale
         run: |
           Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile "$env:TEMP\ts.msi"
           Start-Process msiexec -ArgumentList "/i","`"$env:TEMP\ts.msi`"","/quiet","/norestart" -Wait
+
       - name: Connect Tailscale
         run: |
           $hn="gh-$env:GITHUB_RUN_ID"
@@ -37,10 +56,12 @@ jobs:
           $ip=$null;$i=0
           while(-not $ip -and $i -lt 10){$ip=& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4;Start-Sleep 5;$i++}
           if(-not $ip){exit 1}; echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
-      - name: Verify
+
+      - name: Verify Connection
         run: |
           if(-not (Test-NetConnection $env:TAILSCALE_IP -Port 3389).TcpTestSucceeded){exit 1}
-      - name: Write creds
+
+      - name: Write Final Info
         run: |
           @"
           HOSTNAME=gh-$env:GITHUB_RUN_ID
@@ -48,8 +69,16 @@ jobs:
           USER=Skyro
           PASS=$env:RDP_PASSWORD
           "@ | Out-File rdp_info.txt -Encoding utf8
-      - name: Upload artifact
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with: { name: rdp-info, path: rdp_info.txt, retention-days: 1 }
-      - name: Keep alive
-        run: while($true){Write-Host alive;Start-Sleep 300}
+
+      - name: Keep Alive Max Power
+        run: |
+          Write-Host ">>> INICIANDO MODO MÁXIMA POTÊNCIA POR 6 HORAS..."
+          while($true){
+              $cpuUsage = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
+              Write-Host "CPU Usage: ${cpuUsage}% | Status: ONLINE"
+              Start-Sleep 300
+          }
